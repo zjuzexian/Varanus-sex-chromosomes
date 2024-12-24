@@ -582,6 +582,12 @@ colnames(wparainfoSub) <- c("wgene","strata")
 wgenestrata <- wgenestrata %>% dplyr::select(4,5)
 colnames(wgenestrata) <- c("wgene","strata")
 wgenestrata <- rbind(wgenestrata,wparainfoSub)
+##Count of w genes with intact orf gametolog
+disruptORF <- read.table(file = "vac.disruptORF.txt")
+df <- wparainfo[grepl("Z", wparainfo$V5),] %>% mutate(
+  orf = ifelse(V1 %in% disruptORF$V1, "Dis","Int"),
+  tpm = if_else(gsub("-T[0-9]", "", V1) %in% rownames(vactpm), "T", "F")
+)
 ##Assign status
 wgenestrata <- wgenestrata %>%
   mutate(
@@ -2113,6 +2119,134 @@ ggplot(final_result,aes(x=file,y=count,fill=type))+
   geom_bar(position="dodge", stat="identity") + theme_bw()
 } # V2R gene numbers in outgroups
 {
+{
+geneloci <- read.table("vac.transcript.loci.txt",header = F,fill=T)
+disruptORF <- read.table(file = "vac.disruptORF.txt")
+v2rloci  <- read.table(file = "v2rVerifiedNR.txt")
+v2rFalseORF <- data.frame(
+  chr = c("chr2", "chr2", "chr2", "chr4", "chr4", "chr4", "chr4", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW"),
+  start = c(255092986, 274581408, 280468408, 334636, 436331, 2758805, 10478135, 4130074, 5758187, 8857316, 9878671, 9919866, 9995389, 10119379, 10920924, 14855038),
+  end = c(255093453, 274582195, 280469287, 394531, 438129, 2759119, 10482293, 4133725, 5758531, 8871161, 9879839, 9923711, 9999097, 10120915, 10922001, 14861092)
+)  %>%  mutate(
+  factor = paste(chr,start,end,sep = "_")
+)
+v2rloci <- v2rloci %>% mutate(
+  chr = case_when(
+    V1 %in% c("chr2", "chr4", "chrZ", "chrW") ~ V1,
+    grepl("scaf", V1) ~ "Unassigned",
+    TRUE ~ "Other Chr"
+  ),
+  factor = paste(V1,V2,V3,sep = "_")
+) %>% filter(V6>100) %>% mutate(
+  orf = ifelse(factor %in% v2rFalseORF$factor, "Disrupted", "Intact")
+)
+genelocisub <- geneloci %>% mutate(
+  v2r = ifelse(V4 %in% v2rloci$V4, "v2r", "other"),
+  orf = ifelse(V4 %in% disruptORF$V1, "Disrupt", "Intact"),
+  chr = case_when(
+    V1 %in% c("chr2", "chr4", "chrZ", "chrW") ~ V1,
+    TRUE ~ "Other Chr"),
+  factor = paste(chr, v2r)) %>% 
+  group_by(chr, orf, factor) %>%
+  summarise(freq = n(), .groups = "drop")
+ggplot(genelocisub, aes(x = factor, y = freq, fill = orf)) +
+  geom_bar(position="fill", stat="identity") +   theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(x = "Chr_V2R", y = "Frequency", fill = "ORF Status", 
+       title = "Stacked Barplot of Chr_V2R by ORF") + 
+  scale_fill_manual(values = c(Intact = "#4daf4a", Disrupt = "#bdbdbd")) 
+#
+df <- genelocisub %>% filter(!grepl("Other Chr", chr))
+results <- df %>%
+  group_by(chr) %>%
+  summarize(
+    chi_test = list({
+      counts <- freq
+      row_labels <- unique(factor)
+      contingency_table <- matrix(
+        counts,
+        nrow = 2,
+        byrow = TRUE,
+        dimnames = list(
+          c(row_labels[1], row_labels[2]),
+          c("Disrupted", "Intact")
+        )
+      )
+      chisq.test(contingency_table)
+    })
+  )
+results <- results %>%
+  mutate(
+    p_value = sapply(chi_test, function(x) x$p.value),
+    X_squared = sapply(chi_test, function(x) x$statistic)
+  )
+print(results)
+
+} # Va
+{
+vsageneloci <- read.table("vsa.pep.loci")
+vsadisrupt <-  read.table("vsa.disrupt.list")
+vsachr2tipscaf <- c("scaf792.1","scaf794.1","scaf685.1","scaf697.1")
+vsachr4scaf <- c("scaf654.1","scaf782.1","scaf781.1","scaf753.1")
+vsaZscaf <- c("scaf802.1")
+vsaWscaf <- c("scaf729.1","scaf715.1","scaf856.1","scaf746.1")  
+vsv2rloci <- read.table(file = "vsa.v2r.txt")
+vsv2rsub <- vsv2rloci %>% filter(V1 %in% c(vsachr2tipscaf,vsachr4scaf,vsaZscaf,vsaWscaf)) %>% mutate(
+  type = case_when(V1 %in% vsachr2tipscaf ~ "VaChr2",
+                   V1 %in% vsachr4scaf ~ "VaChr4",
+                   V1 %in% vsaZscaf ~ "VaChrZ",
+                   V1 %in% vsaWscaf ~ "VaChrW"))
+#
+vsainfodf <- vsageneloci %>% mutate(
+  v2r = ifelse(V4 %in% vsv2rsub$V4, "V2R", "Other"),
+  orf = ifelse(V4 %in% vsadisrupt$V1, "Disrupted", "Intact"),
+  chr = case_when(V1 %in% vsachr2tipscaf ~ "Chr2",
+                  V1 %in% vsachr4scaf ~ "Chr4",
+                  V1 %in% vsaZscaf ~ "ChrZ",
+                  V1 %in% vsaWscaf ~ "ChrW")
+) %>% replace_na(list(v2r = "Other", orf = "Other", chr = "Other")) 
+summary_table <- vsainfodf %>%
+  mutate(chr_v2r = paste(chr, v2r, sep = "_")) %>%  
+  count(chr_v2r, orf, name = "count")
+  
+ggplot(summary_table, aes(x = chr_v2r, y = count, fill = orf)) +
+  geom_bar(position="fill", stat="identity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(x = "Chr_V2R", y = "Frequency", fill = "ORF Status", 
+       title = "Stacked Barplot of Chr_V2R by ORF") + 
+  scale_fill_manual(values = c("Disrupted"="#bdbdbd","Intact"="#4daf4a"))
+#
+df <- summary_table %>%
+  mutate(chr = sub("_.*", "", chr_v2r)) %>% filter(!grepl("Other", chr))
+results <- df %>%
+  group_by(chr) %>%
+  summarize(
+    chi_test = list({
+      counts <- count
+      row_labels <- unique(chr_v2r)
+      contingency_table <- matrix(
+        counts,
+        nrow = 2,
+        byrow = TRUE,
+        dimnames = list(
+          c(row_labels[1], row_labels[2]),
+          c("Disrupted", "Intact")
+        )
+      )
+      chisq.test(contingency_table)
+    })
+  )
+results <- results %>%
+  mutate(
+    p_value = sapply(chi_test, function(x) x$p.value),
+    X_squared = sapply(chi_test, function(x) x$statistic)
+  )
+print(results)
+#
+} # Vs
+} # Proportion of V2R with disrupted ORFs
+{
 geneloci <- read.table("vac_zjuV2.final.geneloci",header = F,fill=T)
 disruptORF <- read.table(file = "vac.disruptORF.txt")
 #define single copy of multicopy genes
@@ -2186,7 +2320,7 @@ pie2 <- ggplot(data2, aes(x = "", y = Freq, fill =
   labs(title = "Intact ORF")
 ggarrange(pie1,pie2, legend = "bottom")
     
-} # W gene numbers donut
+} # W gene numbers donuts
 {
 #Pariwise identity
 v2rpariwiseID <- read.table("v2r.vavsxt.identity.txt")
@@ -2225,7 +2359,35 @@ Heatmap(v2rpariwiseID,
         use_raster = TRUE, raster_quality = 5,
         border = TRUE,
         show_column_dend = FALSE, show_row_dend = FALSE)
-} # V2R tree in Va, Vs and Em
+#
+## Va + Vs + Xt Tree
+tr = read.tree("v2r.fasttree.nwk") #only xenopus as ref
+#
+v2rFalseORF <- data.frame(
+  chr = c("chr2", "chr2", "chr2", "chr4", "chr4", "chr4", "chr4", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW", "chrW"),
+  start = c(255092986, 274581408, 280468408, 334636, 436331, 2758805, 10478135, 4130074, 5758187, 8857316, 9878671, 9919866, 9995389, 10119379, 10920924, 14855038),
+  end = c(255093453, 274582195, 280469287, 394531, 438129, 2759119, 10482293, 4133725, 5758531, 8871161, 9879839, 9923711, 9999097, 10120915, 10922001, 14861092)
+)  %>%  mutate(
+  factor = paste(chr,start,end,sep = "_")
+)
+treeanno <- read.table("v2r.vavsxt.chr.anno.txt")
+treeanno <- treeanno %>% mutate(
+  label = gsub("_vac.*", "", V1),
+  species = gsub("_.*","", V2),
+  chr = ifelse(V2 == "xenopus", "xenopus", gsub("[a-z]*_","", V2)),
+  orf = ifelse(label %in% v2rFalseORF$factor, "Disrupted", NA)
+) %>% select(V1, species, chr, orf)  
+rownames(treeanno) <- treeanno$V1
+treeanno <- treeanno %>% select(-V1)
+p1 <- ggtree(tr, layout = "fan", size=.2, open.angle= 10, branch.length = "none") 
+gheatmap(p1, treeanno, offset = 1, width=.3) + scale_fill_manual(
+  values = c("chrZ" = "#0000cd", "chrW" = "#cd0000", 
+             "chr4" = "#4daf4a", "chr2" = "#ff7f00",
+             "xenopus" = "black","vac"="#0000cd", "vsa" = "#cd0000",
+             "Disrupted" = "black")
+)
+
+} # V2R tree in Va, Vs and Xt
 {
 v2rloci  <- read.table(file = "v2rVerifiedNR.txt")
 v2rFalseORF <- data.frame(
@@ -2319,8 +2481,6 @@ wilcox.test(subset(dndssub, type == "V2R_4")$V2, subset(dndssub, type == "HLADPB
 wilcox.test(subset(dndssub, type == "V2R_4")$V2, subset(dndssub, type == "RNF39")$V2)
 wilcox.test(subset(dndssub, type == "V2R_4")$V2, subset(dndssub, type == "SingleCopy")$V2)
 #
-
-
 {
 dndsSub <- dndsSub %>%
   mutate(factor2 = paste(chr, factor, sep = "_"))
